@@ -1,0 +1,5 @@
+applications:
+  - name: django-app
+    repo: ${django_app_repo}
+    path: ${django_app_path}
+    branch: ${django_app_branch}

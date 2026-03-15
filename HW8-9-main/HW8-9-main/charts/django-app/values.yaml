@@ -1,0 +1,130 @@
+replicaCount: 2
+
+image:
+  repository: django-app
+  pullPolicy: IfNotPresent
+  tag: "latest"
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+
+securityContext:
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: false
+  allowPrivilegeEscalation: false
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8000
+  annotations: {}
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: django-app.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 250m
+    memory: 256Mi
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 80
+  targetMemoryUtilizationPercentage: 80
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+              - key: app
+                operator: In
+                values:
+                  - django-app
+          topologyKey: kubernetes.io/hostname
+
+env:
+  - name: DEBUG
+    value: "False"
+  - name: ALLOWED_HOSTS
+    value: "localhost,127.0.0.1,django-app.local"
+  - name: SECRET_KEY
+    valueFrom:
+      secretKeyRef:
+        name: django-secrets
+        key: secret-key
+        optional: true
+  - name: DATABASE_HOST
+    value: "postgres.default.svc.cluster.local"
+  - name: DATABASE_PORT
+    value: "5432"
+  - name: DATABASE_NAME
+    value: "django_db"
+  - name: DATABASE_USER
+    valueFrom:
+      secretKeyRef:
+        name: django-secrets
+        key: db-user
+        optional: true
+  - name: DATABASE_PASSWORD
+    valueFrom:
+      secretKeyRef:
+        name: django-secrets
+        key: db-password
+        optional: true
+
+livenessProbe:
+  httpGet:
+    path: /health/
+    port: http
+  initialDelaySeconds: 30
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /health/
+    port: http
+  initialDelaySeconds: 10
+  periodSeconds: 5
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+volumeMounts: []
+
+volumes: []

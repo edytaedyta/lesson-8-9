@@ -1,0 +1,121 @@
+controller:
+  image: "jenkins/jenkins"
+  tag: "2.387.3"
+  imagePullPolicy: "IfNotPresent"
+
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "512Mi"
+    limits:
+      cpu: "1000m"
+      memory: "1Gi"
+
+  serviceType: LoadBalancer
+
+  installPlugins:
+    - kubernetes:latest
+    - workflow-aggregator:latest
+    - git:latest
+    - docker:latest
+    - pipeline-model-definition:latest
+    - jaxb:latest
+    - antisamy:latest
+    - sbt:latest
+    - ansicolor:latest
+    - blueocean:latest
+    - google-kubernetes-engine:latest
+
+  JCasC:
+    enabled: true
+    configScripts:
+      credentials: |
+        credentials:
+          system:
+            domainCredentials:
+              - credentials:
+                  - scope: GLOBAL
+                    id: "docker-hub"
+                    username: "${DOCKER_USERNAME}"
+                    password: "${DOCKER_PASSWORD}"
+                    _class: "com.cloudbees.plugins.credentials.impl.UsernamePasswordCredentialsImpl"
+      jobs: |
+        jobs:
+          - url: file /etc/jenkins/jobs/django-app-pipeline/config.xml
+
+  jobs:
+    django-app-pipeline: |
+      <?xml version='1.1' encoding='UTF-8'?>
+      <org.jenkinsci.plugins.workflow.job.WorkflowJob plugin="workflow-job@1181.v0cbb0b5dea_43">
+        <actions/>
+        <description>Django Application CI/CD Pipeline</description>
+        <keepDependencies>false</keepDependencies>
+        <properties/>
+        <definition class="org.jenkinsci.plugins.workflow.cps.CpsScmFlowDefinition" plugin="workflow-cps@2703.v1a_20d234b_8fb_">
+          <scm class="hudson.plugins.git.GitSCM" plugin="git@4.10.2">
+            <configVersion>2</configVersion>
+            <userRemoteConfigs>
+              <hudson.plugins.git.UserRemoteConfig>
+                <url>https://github.com/your-username/django-app.git</url>
+                <credentialsId>github-ssh-key</credentialsId>
+              </hudson.plugins.git.UserRemoteConfig>
+            </userRemoteConfigs>
+            <branches>
+              <hudson.plugins.git.BranchSpec>
+                <name>*/main</name>
+              </hudson.plugins.git.BranchSpec>
+            </branches>
+            <doGenerateSubmoduleConfigurations>false</doGenerateSubmoduleConfigurations>
+            <submoduleCfg class="empty-list"/>
+            <extensions/>
+          </scm>
+          <scriptPath>Jenkinsfile</scriptPath>
+          <lightweight>true</lightweight>
+        </definition>
+        <triggers/>
+        <disabled>false</disabled>
+      </org.jenkinsci.plugins.workflow.job.WorkflowJob>
+
+persistence:
+  enabled: true
+  size: 10Gi
+  storageClassName: gp2
+
+rbac:
+  create: true
+
+serviceAccount:
+  create: true
+  name: jenkins
+  annotations: {}
+
+agent:
+  enabled: true
+  image: "jenkins/inbound-agent"
+  tag: "3191.v2d49f0f0e9c9"
+
+  podTemplates:
+    kaniko:
+      - name: kaniko
+        label: kaniko
+        serviceAccount: jenkins
+        containers:
+          - name: kaniko
+            image: gcr.io/kaniko-project/executor:latest
+            command: /busybox/cat
+            tty: true
+            args: ""
+            securityContext:
+              runAsUser: 0
+            volumeMounts:
+              - name: docker-config
+                mountPath: /kaniko/.docker
+        volumes:
+          - name: docker-config
+            projected:
+              sources:
+                - secret:
+                    name: dockerhub
+                    items:
+                      - key: .dockercfg
+                        path: config.json

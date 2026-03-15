@@ -1,0 +1,185 @@
+pipeline {
+    agent {
+        kubernetes {
+            yaml '''
+apiVersion: v1
+kind: Pod
+metadata:
+  name: kaniko-pod
+spec:
+  serviceAccountName: jenkins
+  containers:
+  - name: kaniko
+    image: gcr.io/kaniko-project/executor:latest
+    command:
+    - cat
+    tty: true
+    volumeMounts:
+    - name: docker-config
+      mountPath: /kaniko/.docker
+  - name: git
+    image: alpine/git:latest
+    command:
+    - cat
+    tty: true
+  volumes:
+  - name: docker-config
+    projected:
+      sources:
+      - secret:
+          name: dockerhub
+          items:
+          - key: .dockercfg
+            path: config.json
+            '''
+        }
+    }
+    
+    environment {
+        AWS_DEFAULT_REGION = 'us-east-1'
+        DOCKER_REGISTRY = credentials('ecr-registry-url')
+        GIT_REPO = 'https://github.com/your-username/django-app.git'
+        GIT_BRANCH = 'main'
+        HELM_REPO = 'https://github.com/your-username/django-app.git'
+        HELM_CHART_PATH = 'charts/django-app'
+        IMAGE_REPO = "${DOCKER_REGISTRY}/django-app"
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                container('git') {
+                    script {
+                        echo "Checking out source code from ${GIT_REPO}"
+                        checkout([
+                            $class: 'GitSCM',
+                            branches: [[name: "*/${GIT_BRANCH}"]],
+                            userRemoteConfigs: [[
+                                url: "${GIT_REPO}",
+                                credentialsId: 'github-ssh-key'
+                            ]]
+                        ])
+                    }
+                }
+            }
+        }
+
+        stage('Build and Push Image') {
+            steps {
+                container('kaniko') {
+                    script {
+                        echo "Building and pushing Docker image to ECR"
+                        
+                        // Generate image tag based on git commit hash and timestamp
+                        sh '''
+                            COMMIT_HASH=$(git rev-parse --short HEAD)
+                            BUILD_DATE=$(date +%Y%m%d-%H%M%S)
+                            IMAGE_TAG="${COMMIT_HASH}-${BUILD_DATE}"
+                            
+                            echo "IMAGE_TAG=${IMAGE_TAG}" > /tmp/image.env
+                            
+                            /kaniko/executor \
+                                --context=. \
+                                --dockerfile=Dockerfile \
+                                --destination=${IMAGE_REPO}:${IMAGE_TAG} \
+                                --destination=${IMAGE_REPO}:latest \
+                                --cache=true \
+                                --cache-repo=${IMAGE_REPO}/cache
+                        '''
+                    }
+                }
+            }
+        }
+
+        stage('Update Helm Values') {
+            steps {
+                container('git') {
+                    script {
+                        echo "Updating Helm chart with new image tag"
+                        
+                        sh '''
+                            # Read the image tag from previous stage
+                            source /tmp/image.env
+                            
+                            # Clone the Helm repository (if different from source)
+                            if [ "${HELM_REPO}" != "${GIT_REPO}" ]; then
+                                rm -rf helm-repo
+                                git clone --depth 1 ${HELM_REPO} helm-repo
+                                cd helm-repo
+                            fi
+                            
+                            # Update the values.yaml file with the new image tag
+                            sed -i "s|tag:.*|tag: ${IMAGE_TAG}|" ${HELM_CHART_PATH}/values.yaml
+                            sed -i "s|image:.*|image: ${IMAGE_REPO}|" ${HELM_CHART_PATH}/values.yaml
+                            
+                            # Configure git
+                            git config --global user.email "jenkins@cicd-pipeline.local"
+                            git config --global user.name "Jenkins CI/CD"
+                            
+                            # Commit and push changes
+                            git add ${HELM_CHART_PATH}/values.yaml
+                            
+                            if git diff --cached --quiet; then
+                                echo "No changes to commit"
+                            else
+                                git commit -m "🚀 Update image tag to ${IMAGE_TAG}"
+                                git push origin ${GIT_BRANCH}
+                                echo "✅ Successfully pushed Helm chart updates"
+                            fi
+                        '''
+                    }
+                }
+            }
+        }
+
+        stage('Trigger Argo CD Sync') {
+            steps {
+                script {
+                    echo "Triggering Argo CD to sync the application"
+                    
+                    sh '''
+                        # Get Argo CD server and credentials
+                        ARGOCD_SERVER=$(kubectl get svc -n argocd argo-cd-argocd-server -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+                        ARGOCD_PASSWORD=$(kubectl get secret -n argocd argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d)
+                        
+                        # Download and install argocd CLI if not present
+                        if ! command -v argocd &> /dev/null; then
+                            curl -sSL -o /usr/local/bin/argocd https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
+                            chmod +x /usr/local/bin/argocd
+                        fi
+                        
+                        # Login to Argo CD
+                        argocd login ${ARGOCD_SERVER} --username admin --password ${ARGOCD_PASSWORD} --insecure
+                        
+                        # Trigger application sync
+                        argocd app sync django-app --force
+                        
+                        # Wait for sync to complete
+                        argocd app wait django-app --sync
+                        
+                        echo "✅ Successfully synced application in Argo CD"
+                    '''
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            script {
+                echo "Cleaning up resources..."
+                // Cleanup if needed
+            }
+        }
+        
+        success {
+            echo "✅ Pipeline completed successfully!"
+            // Send success notification
+        }
+        
+        failure {
+            echo "❌ Pipeline failed!"
+            // Send failure notification
+        }
+    }
+}

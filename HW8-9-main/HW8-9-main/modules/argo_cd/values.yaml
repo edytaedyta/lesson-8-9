@@ -1,0 +1,35 @@
+global:
+  domain: argocd.local
+
+configs:
+  params:
+    server.insecure: true
+
+server:
+  service:
+    type: LoadBalancer
+
+  ingress:
+    enabled: false
+
+redis:
+  enabled: true
+
+controller:
+  replicas: 1
+
+repoServer:
+  replicas: 1
+
+dex:
+  enabled: true
+
+applicationSet:
+  enabled: false
+
+notifications:
+  enabled: false
+
+crds:
+  install: true
+  keep: true
